@@ -271,6 +271,9 @@ public class EcsContainerManager {
 
         List<ContainerDefinition> launchOrder = orderForDependencies(
                 launchOrder(taskDef.getContainerDefinitions(), firelensRouter), firelensRouter);
+        String platform = taskDef.getRuntimePlatform() != null
+                ? taskDef.getRuntimePlatform().dockerPlatform()
+                : null;
 
         // Task-level volumes consumed by per-container mountPoints: host volumes map their
         // name -> absolute host source path; efsVolumeConfiguration volumes map their
@@ -326,7 +329,7 @@ public class EcsContainerManager {
             // tag again cannot swap the image under this task's reported digest.
             for (ContainerDefinition def : launchOrder) {
                 LaunchImage launchImage = lifecycleManager.resolveImageForLaunch(imagesByContainer.get(def),
-                        config.services().ecs().imagePullBehavior());
+                        config.services().ecs().imagePullBehavior(), platform);
                 imagesByContainer.put(def, launchImage.imageId());
                 if (launchImage.manifestDigest() != null) {
                     imageDigestsByContainer.put(def.getName(), launchImage.manifestDigest());
@@ -404,6 +407,7 @@ public class EcsContainerManager {
                         // own loopback.
                         .withHostDockerInternalOnLinux()
                         .withEmbeddedDns()
+                        .withJavaTrustStore()
                         .withLabels(ContainerStorageHelper.resourceIdentityLabels(
                                 "ecs", taskId, regionResolver.getAccountId(), region))
                         .withLabels(ownerLabels());
@@ -557,7 +561,7 @@ public class EcsContainerManager {
 
                 String dockerId;
                 if (def == firelensRouter) {
-                    dockerId = lifecycleManager.create(spec);
+                    dockerId = lifecycleManager.create(spec, platform);
                     try {
                         copyFirelensConfig(dockerId, firelensConfig, isFluentdRouter(firelensRouter),
                                 firelensExternalConfig, firelensBackoffMillis);
@@ -568,7 +572,7 @@ public class EcsContainerManager {
                     }
                     fluentHost = inspectContainerIp(dockerId);
                 } else {
-                    ContainerInfo info = lifecycleManager.createAndStartEphemeral(spec);
+                    ContainerInfo info = lifecycleManager.createAndStartEphemeral(spec, platform);
                     dockerId = info.containerId();
                 }
 
@@ -2124,7 +2128,7 @@ public class EcsContainerManager {
 
     /** The region embedded in an ARN {@code valueFrom} (4th segment), or {@code taskRegion} for a bare name. */
     private String arnRegion(String valueFrom, String taskRegion) {
-        if (valueFrom != null && valueFrom.startsWith("arn:")) {
+        if (AwsArnUtils.looksLikeArn(valueFrom)) {
             String[] parts = valueFrom.split(":", 5);
             if (parts.length >= 4 && !parts[3].isBlank()) {
                 return parts[3];
